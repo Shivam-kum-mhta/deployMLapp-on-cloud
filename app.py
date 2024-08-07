@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from transformers import DistilBertTokenizer, DistilBertForSequenceClassification
 import torch
 import logging
-
+import os
 app = FastAPI()
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -50,4 +50,4 @@ async def predict_profanity_endpoint(input: TextInput, request: Request):
 if __name__ == "__main__":
     import uvicorn
     logging.basicConfig(level=logging.INFO)
-    uvicorn.run(app, host="127.0.0.1", port=8001)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8001)))
