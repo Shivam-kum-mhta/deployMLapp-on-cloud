@@ -1,105 +1,122 @@
-from fastapi import FastAPI, HTTPException, Request
-from pydantic import BaseModel
-from transformers import DistilBertTokenizer, DistilBertForSequenceClassification
-import torch
+# Import libraries
+from ultralytics import YOLO
+import cv2
+import numpy as np
 import logging
-<<<<<<< HEAD
+# Load the model
+model = YOLO('yolov10n.pt')
 
+from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi.responses import FileResponse
+from pathlib import Path
+from fastapi.routing import APIRouter
+from fastapi.responses import JSONResponse
+from typing import List
+import shutil
 app = FastAPI()
 
-from fastapi.middleware.cors import CORSMiddleware
+def detection (input_video_path):
+  count = 0
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+  # Open the video
+  cap = cv2.VideoCapture(input_video_path)
 
-class TextInput(BaseModel):
-    text: str
+  # Get video properties, to be used to process
+  fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+  fps = cap.get(cv2.CAP_PROP_FPS)
+  width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+  height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+  frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+  output_video_path = input_video_path.split('.')[0] + '-out.mp4'
 
-# Load tokenizer and model
-model_path = "shivamkumaramehta/Search-Shield"  # Replace with your model path
-token = "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"  # Replace with your Hugging Face token
+  # Number of skips
+  num_skips = frames // 200
+  print(f"Frames = {frames}, Number of skips: {num_skips}")
 
-tokenizer = DistilBertTokenizer.from_pretrained(model_path)
-model = DistilBertForSequenceClassification.from_pretrained(model_path, revision="main", token=token)
+  # Define the codec and create VideoWriter object - to write output video
+  out = cv2.VideoWriter(output_video_path, fourcc, fps, (width, height))
 
-# Function to predict profanity
-def predict_profanity(text):
-    inputs = tokenizer(text, truncation=True, padding=True, max_length=512, return_tensors="pt")
-    with torch.no_grad():
-        outputs = model(**inputs)
-    logits = outputs.logits
-    predicted_class = logits.argmax().item()
-    return predicted_class
+  # Until there is a frame left, run the loop - skip num_skip frames
+  while cap.isOpened():
+    ret, frame = cap.read()
+    # If the frame is not there, break
+    for i in range(num_skips):
+      if not ret:
+          break
+      ret, frame = cap.read()
+    if not ret:
+        break
 
-# Endpoint to predict profanity
-@app.post("/predict-profanity/")
-async def predict_profanity_endpoint(input: TextInput, request: Request):
-    try:
-        logging.info(f"Received request: {await request.json()}")
-        predicted_class = predict_profanity(input.text)
-        logging.info(f"Predicted class: {predicted_class}")
-        return {"predicted_class": predicted_class}
-    except Exception as e:
-        logging.error(f"Error processing request: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+    # Run YOLO model on the frame selected
+    results = model(frame)
+    count += 1
 
-# Vercel doesn't need this part
-# if __name__ == "__main__":
-#     import uvicorn
-#     logging.basicConfig(level=logging.INFO)
-#     uvicorn.run(app, host="127.0.0.1", port=8001)
-=======
-import os
-app = FastAPI()
+    # For all the result boxes, plot them into a frame
+    annotated_frame = results[0].plot()
 
-from fastapi.middleware.cors import CORSMiddleware
+    # Write the annotated frame to the output video
+    for i in range(num_skips + 1):
+      out.write(annotated_frame)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+  # Close everything
+  cap.release()
+  out.release()
+  cv2.destroyAllWindows()
+  print(f"{count} frames processed.")
+  return output_video_path
 
-class TextInput(BaseModel):
-    text: str
 
-# Load tokenizer and model
-model_path = "shivamkumaramehta/Search-Shield"  # Replace with your model path
-token = "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"  # Replace with your Hugging Face token
+# Directory to save uploaded files temporarily
+UPLOAD_DIR = Path("uploads")
+UPLOAD_DIR.mkdir(exist_ok=True)
 
-tokenizer = DistilBertTokenizer.from_pretrained(model_path)
-model = DistilBertForSequenceClassification.from_pretrained(model_path, revision="main", token=token)
+# Create routers
+image_router = APIRouter()
+video_router = APIRouter()
 
-# Function to predict profanity
-def predict_profanity(text):
-    inputs = tokenizer(text, truncation=True, padding=True, max_length=512, return_tensors="pt")
-    with torch.no_grad():
-        outputs = model(**inputs)
-    logits = outputs.logits
-    predicted_class = logits.argmax().item()
-    return predicted_class
+@image_router.post("/upload-image/")
+async def upload_image(file: UploadFile = File(...)):
+    # Verify file type
+    if file.content_type not in ["image/jpeg", "image/png", "image/gif"]:
+        raise HTTPException(status_code=400, detail="Invalid image format")
 
-# Endpoint to predict profanity
-@app.post("/predict-profanity/")
-async def predict_profanity_endpoint(input: TextInput, request: Request):
-    try:
-        logging.info(f"Received request: {await request.json()}")
-        predicted_class = predict_profanity(input.text)
-        logging.info(f"Predicted class: {predicted_class}")
-        return {"predicted_class": predicted_class}
-    except Exception as e:
-        logging.error(f"Error processing request: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+    # You can save the file here or process it directly
+    # For demonstration, we just return the file name
+    return {"filename": file.filename}
+
+@video_router.post("/upload-video/")
+async def upload_video(file: UploadFile = File(...)):
+    # Verify file type
+    if file.content_type not in ["video/mp4", "video/mpeg", "video/avi"]:
+        raise HTTPException(status_code=400, detail="Invalid video format")
+
+    # You can save the file here or process it directly
+        # Save the file to the upload directory
+    file_path = UPLOAD_DIR / file.filename
+    with file_path.open("wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+    print("file_path ============================== " , file_path)
+    # You can process the file here if needed
+    output_file_path=detection(file_path)
+    # Return the file as a downloadable response
+    return FileResponse(output_file_path, media_type=file.content_type, filename=file.filename)
+
+
+    # For demonstration, we just return the file name
+    detection(file)
+    return {"filename": file.filename}
+
+# Register routers with the FastAPI app
+app.include_router(image_router, prefix="/image")
+app.include_router(video_router, prefix="/video")
+
+# Root endpoint for testing
+@app.get("/")
+async def root():
+    return {"message": "Welcome to the image and video upload API"}
 
 if __name__ == "__main__":
     import uvicorn
     logging.basicConfig(level=logging.INFO)
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8001)))
->>>>>>> 1e444e8d86b551d6658ded2ca4d936a838156c5f
+    uvicorn.run(app, host="127.0.0.1", port=8001)
+
